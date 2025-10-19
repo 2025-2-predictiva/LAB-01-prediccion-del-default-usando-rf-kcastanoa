@@ -92,3 +92,160 @@
 # {'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
+import pandas as pd
+import gzip
+import pickle
+import os
+
+test_data = pd.read_csv(
+        f"files/input/test_data.csv.zip",
+        index_col=False,
+        compression="zip",
+    )
+train_data = pd.read_csv(
+        f"files/input/train_data.csv.zip",
+        index_col=False,
+        compression="zip",
+    )
+## Paso 1 Limpiar la data
+
+def clean_data(df):
+    # 1. Eliminar la columna 'ID' si existe
+    if 'ID' in df.columns:
+        df = df.drop(columns=['ID'])
+    # 2. Renombrar la columna a 'default' si existe
+    if "default payment next month" in df.columns:
+        df = df.rename(columns={'default payment next month': 'default'})
+    # 3. Reemplazar valores >4 
+    if 'EDUCATION' in df.columns:
+        df['EDUCATION']=df['EDUCATION'].apply(lambda x: 4 if x > 4 else x)
+    # 4. Eliminar filas con valores NaN
+    df = df.dropna()
+    
+    return df
+train_data=clean_data(train_data)
+test_data=clean_data(test_data)
+
+## Paso 2 Dividir la data
+x_train = train_data.drop(columns=['default'])
+y_train = train_data['default']
+
+x_test = test_data.drop(columns=['default'])
+y_test = test_data['default']
+
+## Paso 3 Creación del pipepline y ajuste de modelo
+def make_pipeline(estimator):
+
+    from sklearn.compose import ColumnTransformer
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import OneHotEncoder
+
+    cols=['SEX','EDUCATION','MARRIAGE','AGE']
+    transformer = ColumnTransformer(
+        transformers=[
+            ("ohe", OneHotEncoder(dtype="int",handle_unknown="ignore"),cols),
+        ],
+        remainder="passthrough",
+    )
+    pipeline = Pipeline(
+        steps=[
+            ("tranformer", transformer),
+            ("estimator", estimator),
+        ],
+        verbose=False,
+    )
+
+    return pipeline
+
+# Modelo estimador
+from sklearn.ensemble import RandomForestClassifier
+rf = RandomForestClassifier(random_state=42, n_estimators=500)
+rf_estimator=make_pipeline(rf)
+
+## Paso 4 Optimizar hiperparámetros 10 splits
+from sklearn.model_selection import GridSearchCV
+# Grid mínimo para cumplir la especificación
+param_grid = {"estimator__n_estimators": [500]}
+
+grid_search = GridSearchCV(
+    estimator=rf_estimator,                       
+    param_grid=param_grid,
+    scoring={"bal": "balanced_accuracy", "acc": "accuracy"},
+    refit="acc",
+    cv=10,
+    n_jobs=-1,
+    verbose=0,
+)
+
+## Paso 5 Guardar el modelo comprimido
+grid_search.fit(x_train,y_train)
+
+def save_estimator(estimator):
+    # Crear carpeta destino si no existe
+    os.makedirs("files/models", exist_ok=True)
+    # Guardar modelo comprimido en formato .pkl.gz
+    with gzip.open("files/models/model.pkl.gz", "wb") as file:
+        pickle.dump(estimator, file)
+
+save_estimator(grid_search)
+
+## Paso 6 Métricas de precisión
+import json
+from sklearn.metrics import precision_score, recall_score, f1_score, balanced_accuracy_score
+
+with gzip.open("files/models/model.pkl.gz", "rb") as f:
+    loaded_model = pickle.load(f)
+
+y_train_pred = grid_search.predict(x_train)
+y_test_pred = grid_search.predict(x_test)
+
+metrics = [
+    {
+        "type": "metrics",
+        "dataset": "train",
+        "precision": precision_score(y_train, y_train_pred),
+        "balanced_accuracy": balanced_accuracy_score(y_train, y_train_pred),
+        "recall": recall_score(y_train, y_train_pred),
+        "f1_score": f1_score(y_train, y_train_pred)
+    },
+    {
+        "type": "metrics",
+        "dataset": "test",
+        "precision": precision_score(y_test, y_test_pred),
+        "balanced_accuracy": balanced_accuracy_score(y_test, y_test_pred),
+        "recall": recall_score(y_test, y_test_pred),
+        "f1_score": f1_score(y_test, y_test_pred)
+    }
+]
+
+os.makedirs("files/output", exist_ok=True)
+
+with open("files/output/metrics.json", "w") as f:
+    for row in metrics:
+        f.write(json.dumps(row) + "\n")
+
+## Paso 7 Matrices de confusión
+from sklearn.metrics import confusion_matrix
+cm_train = confusion_matrix(y_train, y_train_pred)
+cm_test = confusion_matrix(y_test, y_test_pred)
+
+os.makedirs("files/output", exist_ok=True)
+
+metrics = [
+    {
+        "type": "cm_matrix",
+        "dataset": "train",
+        "true_0": {"predicted_0": int(cm_train[0][0]), "predicted_1": int(cm_train[0][1])},
+        "true_1": {"predicted_0": int(cm_train[1][0]), "predicted_1": int(cm_train[1][1])}
+    },
+    {
+        "type": "cm_matrix",
+        "dataset": "test",
+        "true_0": {"predicted_0": int(cm_test[0][0]), "predicted_1": int(cm_test[0][1])},
+        "true_1": {"predicted_0": int(cm_test[1][0]), "predicted_1": int(cm_test[1][1])}
+    }
+]
+
+with open("files/output/metrics.json", "a") as f:
+    for row in metrics:
+        f.write(json.dumps(row) + "\n")
