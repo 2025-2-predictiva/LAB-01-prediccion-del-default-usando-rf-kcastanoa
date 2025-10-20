@@ -140,10 +140,12 @@ def make_pipeline(estimator):
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import OneHotEncoder
 
-    cols=['SEX','EDUCATION','MARRIAGE','AGE']
+    cols=['SEX','EDUCATION','MARRIAGE']
+    cols_num=[c for c in x_train.columns if c not in cols]
     transformer = ColumnTransformer(
         transformers=[
             ("ohe", OneHotEncoder(dtype="int",handle_unknown="ignore"),cols),
+            ("num", "passthrough", cols_num),
         ],
         remainder="passthrough",
     )
@@ -159,13 +161,16 @@ def make_pipeline(estimator):
 
 # Modelo estimador
 from sklearn.ensemble import RandomForestClassifier
-rf = RandomForestClassifier(random_state=42, n_estimators=500)
+rf = RandomForestClassifier(random_state=42, n_estimators=500, n_jobs=1)
 rf_estimator=make_pipeline(rf)
 
 ## Paso 4 Optimizar hiperparámetros 10 splits
 from sklearn.model_selection import GridSearchCV
 # Grid mínimo para cumplir la especificación
-param_grid = {"estimator__n_estimators": [500]}
+param_grid = {
+    "estimator__n_estimators": [500],
+    "estimator__max_depth": [33], 
+}
 
 grid_search = GridSearchCV(
     estimator=rf_estimator,                       
@@ -173,8 +178,7 @@ grid_search = GridSearchCV(
     scoring={"bal": "balanced_accuracy", "acc": "accuracy"},
     refit="acc",
     cv=10,
-    n_jobs=-1,
-    verbose=0,
+    n_jobs=1,
 )
 
 ## Paso 5 Guardar el modelo comprimido
